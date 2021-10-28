@@ -1,153 +1,97 @@
-import os
-import lyricsgenius as lg
-from settings import *
-import re
-import unicodedata
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+from keras.models import Model
+from keras.layers import Input, LSTM, Dense
+
+batch_size = 64  # Batch size for training.
+epochs = 100  # Number of epochs to train for.
+latent_dim = 256  # Latent dimensionality of the encoding space.
+num_samples = 10000  # Number of samples to train on.
+# Path to the data txt file on disk.
+data_path = "fra.txt"
+input_texts = []
+target_texts = []
+input_characters = set()
+target_characters = set()
+with open(data_path, "r", encoding="utf-8") as f:
+    lines = f.read().split("\n")
+for line in lines[: min(num_samples, len(lines) - 1)]:
+    input_text, target_text, _ = line.split("\t")
+    # We use "tab" as the "start sequence" character
+    # for the targets, and "\n" as "end sequence" character.
+    target_text = "\t" + target_text + "\n"
+    input_texts.append(input_text)
+    target_texts.append(target_text)
+    for char in input_text:
+        if char not in input_characters:
+            input_characters.add(char)
+    for char in target_text:
+        if char not in target_characters:
+            target_characters.add(char)
+
+input_characters = sorted(list(input_characters))
+target_characters = sorted(list(target_characters))
+num_encoder_tokens = len(input_characters)
+num_decoder_tokens = len(target_characters)
+max_encoder_seq_length = max([len(txt) for txt in input_texts])
+max_decoder_seq_length = max([len(txt) for txt in target_texts])
+
+print("Number of samples:", len(input_texts))
+print("Number of unique input tokens:", num_encoder_tokens)
+print("Number of unique output tokens:", num_decoder_tokens)
+print("Max sequence length for inputs:", max_encoder_seq_length)
+print("Max sequence length for outputs:", max_decoder_seq_length)
+
+# Define an input sequence and process it.
+encoder_inputs = Input(shape=(None, num_encoder_tokens))
+encoder = LSTM(latent_dim, return_state=True)
+encoder_outputs, state_h, state_c = encoder(encoder_inputs)
+# We discard `encoder_outputs` and only keep the states.
+encoder_states = [state_h, state_c]
+
+# Set up the decoder, using `encoder_states` as initial state.
+decoder_inputs = Input(shape=(None, num_decoder_tokens))
+# We set up our decoder to return full output sequences,
+# and to return internal states as well. We don't use the
+# return states in the training model, but we will use them in inference.
+decoder_lstm = LSTM(latent_dim, return_sequences=True, return_state=True)
+decoder_outputs, _, _ = decoder_lstm(decoder_inputs,
+                                     initial_state=encoder_states)
+decoder_dense = Dense(num_decoder_tokens, activation='softmax')
+decoder_outputs = decoder_dense(decoder_outputs)
+
+# Define the model that will turn
+# `encoder_input_data` & `decoder_input_data` into `decoder_target_data`
+model = Model([encoder_inputs, decoder_inputs], decoder_outputs)
 
 
-def slugify(value):
-    """
-    Makes a string value valid for filename
-    """
-    new_value = str(value)
-    invalid = '<>"!\|/?* '
 
-    for char in invalid:
-        new_value = new_value.replace(char, '')
-
-    return new_value
-
-class GeniusApiHandler:
-
-    def __init__(self, access_token, skip_non_songs=True, excluded_terms=("(Remix)", "(Live)", "(Demo)")):
-        """
-        Initialize a GeniusApiHandler that is used to scour Genius.com for song-lyrics.
-        :param access_token: The Genius-API access token.
-        :param skip_non_songs: True if you want to skip "non-songs" -
-        this includes for instance track-lists and other non-song elements by the artists.
-        :param excluded_terms: Exclude songs with these terms when searching
-        """
-        self.genius = lg.Genius(access_token, skip_non_songs=skip_non_songs, excluded_terms=excluded_terms)
-
-    def _get_songs_from_artist(self, artist, max_songs=None, include_features=False):
-        """
-        Returns the songs found at genius, than was found when searching for the given artist (Only for top hit).
-        :param artist: The artist to search for
-        :param max_songs: The max number of songs to include. None if you want to include all.
-        :param include_features: Whether or not to include songs where the artist is only featured.
-        :return: List of songs
-        """
-        artist = self.genius.search_artist(artist, max_songs=max_songs, sort='popularity',
-                                           include_features=include_features)
-        return artist.songs
-
-    @staticmethod
-    def _get_lyric_blocks(lyrics):
-        """
-        Returns the lyrical blocks (verses, refrain, bridge, etc.) from the lyrics.
-        :param lyrics: The lyrics to return blocks from
-        :return: The lyrical blocks from the lyrics
-        """
-        blocks = []
-        block = []
-        lines = lyrics.splitlines()
-        for line in lines:
-            if line == "":
-                blocks.append(block)
-                block = []
-            # To combat a bug where newlines sometimes is not added by genius between verses
-            elif "[" in line and len(block) > 1:
-                blocks.append(block)
-                block = [line]
-            else:
-                block.append(line)
-        return blocks
-
-    @staticmethod
-    def _remove_section_headers(lyrics):
-        """
-        Removes the section headers (i.e. [Verse] or [Bridge]) from the lyrics)
-        :param lyrics: The lyrics
-        :return: The lyrics without section headers
-        """
-        new_lyrics = ""
-        for line in lyrics.splitlines():
-            if "[" in line and "]" in line:
-                pass
-            else:
-                new_lyrics += f"{line}\n"
-        return new_lyrics
-
-    @staticmethod
-    def _remove_adlibs(lyrics):
-        """
-        Removes the adlibs (everything between parenthesis from the lyrics.
-        :param lyrics: The lyrics
-        :return: The lyrics without adlibs
-        """
-        new_lyrics = ""
-        for line in lyrics.splitlines():
-            line_without_adlibs = re.sub("[(].*?[)]", "", line)
-            new_lyrics += f"{line_without_adlibs}\n"
-        return new_lyrics
-
-    def _remove_verses_not_by_artist(self, artist, lyrics):
-        """
-        Removes all the verses, bridges, chorus etc. from the lyrics where the given artist is not included.
-        This also automatically removes the section headers from the lyrics.
-        :param artist: The given artist
-        :param lyrics: The lyrics
-        :return: The new lyrics that only has lyrical blocks where the given artist participates
-        """
-        new_lyrics = ""
-        lyric_blocks = self._get_lyric_blocks(lyrics)
-        for block in lyric_blocks:
-            if len(block) > 0:
-                # If block header has a ":" it enlists the artists active in the verse
-                if ":" in block[0] and artist.lower() not in block[0].lower():
-                    pass
-                else:
-                    for line in block[1:]:
-                        new_lyrics += f"{line}\n"
-                    new_lyrics += "\n"
-        return new_lyrics
-
-    def write_lyrics_to_folder(self, artist, max_songs=None, include_features=False, artist_exclusively=True,
-                               remove_adlibs=False, folder=None):
-        """
-        Writes all the lyrics from the given artists songs (capped at max_songs) to separate files in a folder.
-        :param artist: The artist name
-        :param max_songs: The max number of songs
-        :param include_features: Whether or not to include songs where the artist is
-        :param artist_exclusively: Whether or not the written lyrics should only contain the lyrics where the
-        given artist appears in the lyrical block (i.e. verse or bridge)
-        :param remove_adlibs: Whether or not to remove adlibs (anything between a parenthesis is considered an adlib)
-        :param folder: The folder (relative to cwd) to store the lyrics. If none, the name of this is same as artist.
-        """
-        songs = self._get_songs_from_artist(artist, max_songs, include_features)
-
-        if not folder:
-            folder = artist.replace(" ", "")
-        folder = os.path.join(os.getcwd(), folder)
-        if not os.path.isdir(folder):
-            os.mkdir(folder)
-
-        for song in songs:
-            lyrics = song.lyrics
-            if artist_exclusively:
-                lyrics = self._remove_verses_not_by_artist(artist, lyrics)
-            else:
-                lyrics = self._remove_section_headers(lyrics)
-            if remove_adlibs:
-                lyrics = self._remove_adlibs(lyrics)
-            song_slug = slugify(song.title) + ".txt"
-            song_file = os.path.join(folder, song_slug)
-            with open(song_file, "w+", encoding='utf-8') as file:
-                file.write(lyrics)
+# ----------------------------------------------#
 
 
-if __name__ == '__main__':
-    handler = GeniusApiHandler(CLIENT_ACCESS_TOKEN)
-    handler.write_lyrics_to_folder("Travis Scott", max_songs=150)
+# Define an input sequence and process it.
+encoder_inputs = Input(shape=(None,))
+x = Embedding(num_encoder_tokens, latent_dim)(encoder_inputs)
+x, state_h, state_c = LSTM(latent_dim,
+                           return_state=True)(x)
+encoder_states = [state_h, state_c]
 
+# Set up the decoder, using `encoder_states` as initial state.
+decoder_inputs = Input(shape=(None,))
+x = Embedding(num_decoder_tokens, latent_dim)(decoder_inputs)
+x = LSTM(latent_dim, return_sequences=True)(x, initial_state=encoder_states)
+decoder_outputs = Dense(num_decoder_tokens, activation='softmax')(x)
 
+# Define the model that will turn
+# `encoder_input_data` & `decoder_input_data` into `decoder_target_data`
+model = Model([encoder_inputs, decoder_inputs], decoder_outputs)
+
+# Compile & run training
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy')
+# Note that `decoder_target_data` needs to be one-hot encoded,
+# rather than sequences of integers like `decoder_input_data`!
+model.fit([encoder_input_data, decoder_input_data], decoder_target_data,
+          batch_size=batch_size,
+          epochs=epochs,
+          validation_split=0.2)

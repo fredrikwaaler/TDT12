@@ -1,4 +1,5 @@
 import os
+from LyricEmbedding import LyricEmbedding
 import lyricsgenius as lg
 from settings import *
 import re
@@ -147,7 +148,8 @@ class GeniusApiHandler:
 
 
 if __name__ == '__main__':
-    handler = GeniusApiHandler(CLIENT_ACCESS_TOKEN)
-    handler.write_lyrics_to_folder("Travis Scott", max_songs=150)
-
+    #handler = GeniusApiHandler(CLIENT_ACCESS_TOKEN)
+    #handler.write_lyrics_to_folder("Travis Scott", max_songs=150)
+    le = LyricEmbedding(save=False)
+    print(le.get_wv().most_similar("grra"))
 

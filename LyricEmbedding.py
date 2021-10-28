@@ -29,7 +29,8 @@ class LyricEmbedding:
                 file_path = os.path.join(self.lyric_path, file_name)
                 if os.path.isfile(file_path) and os.path.splitext(file_path)[1] == ".txt":
                     for line in open(file_path):
-                        corpus.append(utils.simple_preprocess(line))
+                        new_lyric = utils.simple_preprocess(line)
+                        if len(new_lyric) > 0: corpus.append(new_lyric)
             return corpus
 
         else:

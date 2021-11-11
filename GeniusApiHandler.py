@@ -8,15 +8,16 @@ from utils import slugify
 
 class GeniusApiHandler:
 
-    def __init__(self, access_token, skip_non_songs=True, excluded_terms=("(Remix)", "(Live)", "(Demo)")):
+    def __init__(self, access_token, skip_non_songs=True, excluded_terms=("(Remix)", "(Live)", "(Demo)"), timeout=100):
         """
         Initialize a GeniusApiHandler that is used to scour Genius.com for song-lyrics.
         :param access_token: The Genius-API access token.
         :param skip_non_songs: True if you want to skip "non-songs" -
         this includes for instance track-lists and other non-song elements by the artists.
         :param excluded_terms: Exclude songs with these terms when searching
+        :param timeout: Time before quitting on request
         """
-        self.genius = lg.Genius(access_token, skip_non_songs=skip_non_songs, excluded_terms=excluded_terms)
+        self.genius = lg.Genius(access_token, skip_non_songs=skip_non_songs, excluded_terms=excluded_terms, timeout=timeout)
 
     def _get_songs_from_artist(self, artist, max_songs=None, include_features=False):
         """
@@ -137,6 +138,6 @@ class GeniusApiHandler:
 
 if __name__ == '__main__':
     handler = GeniusApiHandler(CLIENT_ACCESS_TOKEN)
-    handler.write_lyrics_to_folder("Travis Scott", max_songs=150)
+    handler.write_lyrics_to_folder("Outkast", max_songs=150)
 
 
